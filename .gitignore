@@ -35,6 +35,11 @@ htmlcov/
 docs/generated/
 docs/_build/
 
+# cellparam simulation outputs (large; keep off git)
+sim_data/
+sanity_checks.png
+sanity_checks.json
+
 # pytest-benchmark
 benchmark_*.svg
 tests/*.svg
