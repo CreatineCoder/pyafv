@@ -28,6 +28,91 @@ The AFV formalism was introduced and further developed in, for example, Refs. [[
 > See an interactive [simulation demo](https://dapengbi.com/paper_simulation_demos/afv_model/index.html) using **PyAFV** on Prof. Dapeng (Max) Bi's homepage!
 
 
+## ERK feedback dataset (this fork)
+
+This fork adds a periodic AFV tissue with ERK mechanochemical feedback, used to generate simulated training data for inferring the area stiffness $K_a$ and feedback strength $\alpha$ from cell dynamics.
+Everything lives in [`cellparam/sim/`](cellparam/sim):
+
+| File | What it does |
+|---|---|
+| [`tissue.py`](cellparam/sim/tissue.py) | `ERKTissue` simulator and `TissueParams` (all model parameters and defaults) |
+| [`checks.py`](cellparam/sim/checks.py) | Stage 1 sanity checks: energy relaxation, oscillations, amplitude vs $K_a$, ERK–area lag, decay without noise |
+| [`generate.py`](cellparam/sim/generate.py) | Generates the dataset, one `.npz` per simulation run |
+| [`view.py`](cellparam/sim/view.py) | Draws a saved run as a PNG frame or a GIF |
+| [`analysis.py`](cellparam/sim/analysis.py) | Time-series statistics used by the checks |
+
+[`examples/erk_feedback_prototype.py`](examples/erk_feedback_prototype.py) is the earlier single-script prototype of the feedback loop. It is kept for reference only.
+
+### Setup
+
+You need Python 3.10–3.14 (we used 3.12). Clone the fork and install the compiled package from PyPI. Version 0.4.16 is tested and includes `tile_pbc`, which the simulator uses for periodic boundaries.
+```bash
+git clone https://github.com/CreatineCoder/pyafv.git
+cd pyafv
+pip install "pyafv>=0.4.16"
+```
+Run all commands below **from the repository root**, and run them as scripts (`python cellparam/sim/<script>.py`), **not** with `python -m`.
+Running them as scripts means Python imports the fast compiled `pyafv` you installed, not the slower pure-Python source in `./pyafv`.
+
+### 1. Sanity checks (optional, a few minutes)
+
+```bash
+python cellparam/sim/checks.py                    # N=100 cells, quick
+python cellparam/sim/checks.py --N 300            # dataset size, slower
+python cellparam/sim/checks.py --set beta=60 tau_A=3   # override any TissueParams field
+```
+Each check prints `PASS` or `FAIL`. The script writes `sanity_checks.png` and `sanity_checks.json` to `--out` (default: the current directory).
+Check 4 also measures how many minutes one simulation time unit represents. If you change model parameters, use that result to update `MINUTES_PER_TIME_UNIT` in `generate.py`.
+
+> With the current defaults, checks 1, 3, 4 and 5 pass. Check 2 (sustained oscillations) fails at N=100.
+
+### 2. Generate the dataset
+
+Try the pipeline end to end first. This runs 2 tiny runs and finishes in minutes:
+```bash
+python cellparam/sim/generate.py --split train --out sim_data --smoke
+```
+Delete `sim_data/train` after the smoke test. The real train runs would otherwise skip the tiny smoke files, because they have the same names.
+
+Then generate the four splits:
+```bash
+python cellparam/sim/generate.py --split train     --out sim_data   # 125 runs: Ka {0.1..0.5} x alpha {60..100} x seeds 0-4
+python cellparam/sim/generate.py --split test      --out sim_data   #  32 runs: Ka {0.15..0.45} x alpha {65..95} x seeds 100-101
+python cellparam/sim/generate.py --split extrap    --out sim_data   #   4 runs: Ka {0.05, 0.6}, alpha 80, seeds 200-201
+python cellparam/sim/generate.py --split stability --out sim_data   #   1 run:  Ka 0.3, alpha 80, seed 300 (238 frames)
+```
+Each run has N=300 cells and 1500 frames, one frame every 5 minutes. Output goes to `sim_data/<split>/Ka<Ka>_alpha<alpha>_seed<seed>.npz`. Each train or test file is about 8 MB, so the full train split is about 1 GB.
+`sim_data/` is in `.gitignore`, so every collaborator either generates the data themselves or gets a copy from someone who has.
+
+Useful options:
+- `--workers K` sets the number of parallel processes. The default is CPU cores − 1, so lower it if your machine needs to stay usable.
+- `--N`, `--frames` change the tissue size and run length. Only change them on purpose: all runs in a dataset must use the same values.
+
+**Resuming after an interruption.** If a run is interrupted (crash, shutdown, Ctrl+C), rerun **the same command**.
+Each run is first written to a `.part.npz` file and renamed only when it is complete, so the files that already exist are always complete and get skipped.
+If you see a leftover `*.part.npz` file, delete it. To count finished runs per split:
+```bash
+python -c "import os; [print(s, len([f for f in os.listdir(f'sim_data/{s}') if not f.endswith('.part.npz')])) for s in ['train','test','extrap','stability'] if os.path.isdir(f'sim_data/{s}')]"
+```
+
+Each `.npz` file contains these arrays:
+- `pts` (frames × N × 2) cell centres
+- `areas`, `erk`, `A0` (frames × N)
+- `time`
+- labels `Ka`, `alpha`, `seed`
+- box size `L`, `frame_minutes`, and `A0_clamp_fraction` (how often the preferred-area floor was hit)
+- `params` (all simulator parameters, as JSON)
+
+### 3. Look at a run
+
+```bash
+python cellparam/sim/view.py sim_data/train/Ka0.10_alpha60_seed0.npz                        # frame 0, coloured by area
+python cellparam/sim/view.py sim_data/train/Ka0.10_alpha60_seed0.npz --frame 500 --color erk
+python cellparam/sim/view.py sim_data/train/Ka0.10_alpha60_seed0.npz --gif --frames 200      # animation
+```
+`--color` accepts `area`, `erk` or `A0`. The PNG or GIF is saved in the current directory.
+
+
 ## Installation
 
 **PyAFV** is available on **PyPI** and can be installed using *pip* directly:
