@@ -70,10 +70,14 @@ def run_one(job):
     params = replace(base, Ka=Ka, alpha=float(alpha))
     spf = max(1, round(DT_FRAME_MIN / MINUTES_PER_TIME_UNIT / params.dt))
     t0 = time.time()
-    T = ERKTissue(params, seed=seed)
-    T.relax(RELAX_STEPS)
-    T.record(max(1, round(BURN_IN_TIME / (spf * params.dt))), spf)
-    rec = T.record(frames, spf)
+    try:
+        T = ERKTissue(params, seed=seed)
+        T.relax(RELAX_STEPS)
+        T.record(max(1, round(BURN_IN_TIME / (spf * params.dt))), spf)
+        rec = T.record(frames, spf)
+    except Exception as e:
+        return path, f"FAILED after {time.time() - t0:.0f}s: {type(e).__name__}: {e}"
+    clamp_fraction = T.clamped_cell_steps / max(T.feedback_cell_steps, 1)
 
     tmp = path + ".part.npz"
     np.savez_compressed(
@@ -85,10 +89,12 @@ def run_one(job):
         time=rec["time"],
         Ka=Ka, alpha=alpha, seed=seed, L=T.L,
         frame_minutes=spf * params.dt * MINUTES_PER_TIME_UNIT,
+        A0_clamp_fraction=clamp_fraction,
         params=json.dumps(params.to_dict()),
     )
     os.replace(tmp, path)
-    return path, f"{time.time() - t0:.0f}s"
+    note = f"  (A0 floor used in {clamp_fraction:.1e} of cell-steps)" if clamp_fraction else ""
+    return path, f"{time.time() - t0:.0f}s{note}"
 
 
 def main():
@@ -110,10 +116,18 @@ def main():
     out_dir = os.path.join(args.out, args.split)
     os.makedirs(out_dir, exist_ok=True)
     print(f"{len(jobs)} runs -> {out_dir} (N={base.N}, {frames} frames, {args.workers} workers)", flush=True)
+    failed = []
     with Pool(args.workers) as pool:
         for i, (path, status) in enumerate(pool.imap_unordered(
                 run_one, [(*j, base, frames, out_dir) for j in jobs]), 1):
             print(f"[{i}/{len(jobs)}] {os.path.basename(path)}  {status}", flush=True)
+            if status.startswith("FAILED"):
+                failed.append(os.path.basename(path))
+    if failed:
+        print(f"\n{len(failed)} run(s) failed and were not saved: {', '.join(failed)}\n"
+              "Rerun the same command to retry them (finished files are skipped).", flush=True)
+    else:
+        print("\nAll runs finished.", flush=True)
 
 
 if __name__ == "__main__":

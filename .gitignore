@@ -39,6 +39,8 @@ docs/_build/
 sim_data/
 sanity_checks.png
 sanity_checks.json
+Ka*_*.png
+Ka*_*.gif
 
 # pytest-benchmark
 benchmark_*.svg

@@ -11,7 +11,7 @@ The spec writes the area term as (1/2) Ka (A - A0)^2, so KA_afv = Ka / 2.
 Feedback, per cell, with s_i = A0_i (the preferred area, 1 = unperturbed):
     tau_A ds_i/dt = (1 - s_i) - (alpha / alpha_scale) * E_i
     tau_E dE_i/dt = -E_i - E_i^3 + beta * (A_i / <A> - 1)
-(see TissueParams.alpha_scale for why alpha is rescaled).
+(see TissueParams.alpha_scale for why alpha is rescaled), with s_i floored at A0_min.
 
 Periodic boundaries use pyafv.tile_pbc: cells within 4r of an edge are copied
 to the opposite side each step, which gives correct shapes AND forces for the
@@ -45,6 +45,10 @@ class TissueParams:
     beta: float = 60.0
     tau_A: float = 3.0
     tau_E: float = 3.0
+    # Floor on the preferred area: a cell cannot "want" a non-positive size. Only reached in
+    # rare excursions of the softest, most strongly coupled runs (Ka=0.1, alpha>=80); how
+    # often it binds is counted in ERKTissue.clamped_cell_steps.
+    A0_min: float = 0.1
     dt: float = 0.01
 
     def afv_params(self, seed=None) -> afv.PhysicalParams:
@@ -86,6 +90,8 @@ class ERKTissue:
         self.s = np.ones(self.N)
         self.E = np.zeros(self.N)
         self.t = 0.0
+        self.feedback_cell_steps = 0
+        self.clamped_cell_steps = 0
         self.sim = afv.FiniteVoronoiSimulator(self.pts, self.phys)
 
     def geometry(self):
@@ -119,9 +125,10 @@ class ERKTissue:
             ds = ((1.0 - self.s) - p.alpha / p.alpha_scale * self.E) / p.tau_A
             self.E += p.dt * dE
             self.s += p.dt * ds
-            if self.s.min() <= 0:
-                raise RuntimeError(f"preferred area went non-positive at t={self.t:.2f} "
-                                   f"(min = {self.s.min():.3f}); reduce alpha/alpha_scale or beta")
+            low = self.s < p.A0_min
+            self.s[low] = p.A0_min
+            self.clamped_cell_steps += int(low.sum())
+            self.feedback_cell_steps += self.N
 
         self.t += p.dt
         return A, self.energy(A, P, arc)
